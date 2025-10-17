@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 matplotlib.use('Agg')
 
-# CONFIGURAÇÃO FTP
+# --- CONFIGURAÇÃO FTP ---
 SERVIDOR_FTP = "10.100.100.157"
 UTILIZADOR = "NeoOne"
 SENHA = "Neo@123"
@@ -18,17 +18,14 @@ CAMINHO_DA_PASTA_FTP = "WT_HH"
 NOME_DO_ARQUIVO_IMAGEM = "HH_LoRa_WTSCR.png"
 NOME_DO_ARQUIVO_TXT = "HH_LoRa_WT.txt"
 
-# FUNÇÃO DE CONVERSÃO PARA PERCENTUAL
-
-
+# --- FUNÇÃO DE CONVERSÃO PARA PERCENTUAL ---
 def converter_para_percentual(series_dados):
     min_mah = 4.0
     max_mah = 20.0
     percentual = (series_dados - min_mah) * 100 / (max_mah - min_mah)
     return percentual.clip(0, 100)
 
-
-#  HTML DA PÁGINA PRINCIPAL
+# --- CONTEÚDO HTML DA PÁGINA PRINCIPAL ---
 HTML_PRINCIPAL = """
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -49,13 +46,13 @@ HTML_PRINCIPAL = """
 </head>
 <body>
     <div class="container">
-        <img id="imagemDinamica" src="/imagem" alt="Erro">
+        <img id="imagemDinamica" src="/imagem" alt="Imagem carregada do storage da empresa">
         <div class="info-bar">
             <div class="info-left-group">
                 <span class="info-title">WT HOPI HARI</span>
                 <span id="timestamp-display" class="info-timestamp"></span>
             </div>
-            <a href="/pagina-grafico" class="button">Ver Gráficos</a>
+            <a href="/pagina-grafico" class="button">Ver Gráfico</a>
         </div>
     </div>
     <script>
@@ -74,7 +71,7 @@ HTML_PRINCIPAL = """
 </html>
 """
 
-#  HTML DOS GRÁFICOS
+# --- CONTEÚDO HTML DA PÁGINA DOS GRÁFICOS ---
 HTML_GRAFICO = """
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -131,7 +128,7 @@ HTML_GRAFICO = """
         }
         .grafico-container h1 { margin-top: 0; margin-bottom: 10px; font-size: 1.1em; }
         .grafico-wrapper { flex-grow: 1; width: 100%; height: 100%; }
-        img { width: 100%; height: 100%; object-fit: contain; }
+        img { width: 100%; height: 100%; object-fit: fill; }
     </style>
 </head>
 <body>
@@ -175,6 +172,10 @@ HTML_GRAFICO = """
             const width2 = wrapper2.offsetWidth;
             const height2 = wrapper2.offsetHeight;
             document.getElementById('graficoTanque2').src = `/plot/2?periodo=${periodoAtual}&w=${width2}&h=${height2}&cachebuster=${timestamp}`;
+            
+            const titulos = { 'diario': 'Dia Atual', 'semanal': 'Últimos 7 Dias', 'mensal': 'Últimos 30 Dias' };
+            document.getElementById('titulo-t1').innerText = `Reservatório de Consumo 1 (${titulos[periodoAtual]})`;
+            document.getElementById('titulo-t2').innerText = `Reservatório de Consumo 2 (${titulos[periodoAtual]})`;
         }
         
         document.addEventListener('DOMContentLoaded', atualizarGraficos);
@@ -185,12 +186,10 @@ HTML_GRAFICO = """
 </html>
 """
 
-# APLICAÇÃO WEB
+# --- APLICAÇÃO WEB ---
 app = Flask(__name__)
 
-# FUNÇÃO AUXILIAR PARA LER OS DADOS
-
-
+# --- FUNÇÃO AUXILIAR PARA LER OS DADOS ---
 def obter_dados_do_ftp():
     ftp = None
     try:
@@ -198,8 +197,7 @@ def obter_dados_do_ftp():
         ftp.login(user=UTILIZADOR, passwd=SENHA)
         ftp.cwd(CAMINHO_DA_PASTA_FTP)
         dados_txt_em_memoria = io.BytesIO()
-        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_TXT}",
-                       dados_txt_em_memoria.write)
+        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_TXT}", dados_txt_em_memoria.write)
         dados_txt_em_memoria.seek(0)
         df = pd.read_csv(dados_txt_em_memoria, index_col=0, parse_dates=True)
         return df
@@ -207,11 +205,9 @@ def obter_dados_do_ftp():
         if ftp:
             ftp.quit()
 
-
 @app.route("/")
 def pagina_principal():
     return render_template_string(HTML_PRINCIPAL)
-
 
 @app.route("/imagem")
 def servir_imagem():
@@ -221,8 +217,7 @@ def servir_imagem():
         ftp.login(user=UTILIZADOR, passwd=SENHA)
         ftp.cwd(CAMINHO_DA_PASTA_FTP)
         arquivo_em_memoria = io.BytesIO()
-        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_IMAGEM}",
-                       arquivo_em_memoria.write)
+        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_IMAGEM}", arquivo_em_memoria.write)
         arquivo_em_memoria.seek(0)
         return send_file(arquivo_em_memoria, mimetype='image/png')
     except Exception as e:
@@ -232,11 +227,9 @@ def servir_imagem():
         if ftp:
             ftp.quit()
 
-
 @app.route("/pagina-grafico")
 def pagina_grafico():
     return render_template_string(HTML_GRAFICO)
-
 
 @app.route("/plot/<int:tanque_id>")
 def servir_grafico(tanque_id):
@@ -258,12 +251,10 @@ def servir_grafico(tanque_id):
             mostrar_aviso = True
         elif periodo == 'mensal' and timespan_total < timedelta(days=29):
             mostrar_aviso = True
-
+        
         if mostrar_aviso or df_completo.empty or width < 10 or height < 10:
-            fig, ax = plt.subplots(
-                figsize=(width / dpi, height / dpi), dpi=dpi)
-            ax.text(0.5, 0.5, 'Coletando dados para este período...',
-                    ha='center', va='center', fontsize=18, color='gray')
+            fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+            ax.text(0.5, 0.5, 'Coletando dados para este período...', ha='center', va='center', fontsize=18, color='gray')
             ax.axis('off')
             buffer_imagem = io.BytesIO()
             fig.savefig(buffer_imagem, format='png')
@@ -271,17 +262,17 @@ def servir_grafico(tanque_id):
             plt.close(fig)
             return send_file(buffer_imagem, mimetype='image/png')
 
+        # --- CORREÇÃO ÚNICA APLICADA AQUI ---
         agora = datetime.now()
         if periodo == 'diario':
-            inicio_periodo = agora - timedelta(days=1)
+            # Filtra para o dia corrente, de 00:00 a 23:59
+            hoje_inicio = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+            df = df_completo[df_completo.index >= hoje_inicio].copy()
         elif periodo == 'semanal':
             inicio_periodo = agora - timedelta(days=7)
+            df = df_completo[df_completo.index >= inicio_periodo].copy()
         elif periodo == 'mensal':
             inicio_periodo = agora - timedelta(days=30)
-        else:
-            inicio_periodo = None
-
-        if inicio_periodo:
             df = df_completo[df_completo.index >= inicio_periodo].copy()
         else:
             df = df_completo.copy()
@@ -292,63 +283,52 @@ def servir_grafico(tanque_id):
             coluna_tanque = ' SENSOR 2'
         else:
             return "ID de tanque inválido.", 404
-
+        
         df[coluna_tanque] = converter_para_percentual(df[coluna_tanque])
 
         fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
-
+        
         for spine in ax.spines.values():
             spine.set_linewidth(1.5)
 
-        ax.plot(df.index, df[coluna_tanque], marker='o',
-                linestyle='-', markersize=4, color='blue', zorder=2)
-
-        dias_no_grafico = df.index.normalize().unique()
-        primeira_meia_noite_marcada = False
-        for dia in dias_no_grafico:
-            if dia > df.index.min() and dia < df.index.max():
-                label = 'Meia-noite' if not primeira_meia_noite_marcada else ""
-                ax.axvline(x=dia, color='orange', linestyle='--',
-                           linewidth=1.5, zorder=1, label=label)
-                primeira_meia_noite_marcada = True
-
-        if primeira_meia_noite_marcada:
-            ax.legend()
-
+        ax.plot(df.index, df[coluna_tanque], marker='o', linestyle='-', markersize=4, color='blue', zorder=2)
+        
+        # A linha de meia-noite foi removida
+        
         ax.set_ylim(0, 105)
         ax.set_ylabel('Percentual (%)', fontsize=12)
         ax.set_xlabel('Horário', fontsize=12)
         ax.grid(True)
-
+        
         ax_direita = ax.twinx()
         ax_direita.set_ylim(0, 105)
-
+        
         date_format = mdates.DateFormatter('%H:%M')
         ax.xaxis.set_major_formatter(date_format)
-
+        
         if periodo == 'diario':
             ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         else:
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-
+        
         plt.xticks(rotation=30, ha='right', fontsize=10)
-
+        
         fig.canvas.draw()
-
+        
         for label in ax.get_xticklabels():
             if label.get_text() == '00:00':
                 label.set_color('orange')
                 label.set_fontweight('bold')
-
+        
         fig.tight_layout()
-
+        
         buffer_imagem = io.BytesIO()
         fig.savefig(buffer_imagem, format='png')
         buffer_imagem.seek(0)
         plt.close(fig)
-
+        
         return send_file(buffer_imagem, mimetype='image/png')
-
+        
     except Exception as e:
         print(f"ERRO AO GERAR GRÁFICO DO RESERVATÓRIO {tanque_id}: {e}")
         traceback.print_exc()
