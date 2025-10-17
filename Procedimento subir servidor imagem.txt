@@ -1,0 +1,5 @@
+Abrir CMD na pasta e colar esse códio:
+
+py -m waitress --host=10.10.170.189 --port=8000 app:app
+
+So minimizar o cmd e pronto ja esta rodando
