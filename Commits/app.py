@@ -19,14 +19,11 @@ NOME_DO_ARQUIVO_IMAGEM = "HH_LoRa_WTSCR.png"
 NOME_DO_ARQUIVO_TXT = "HH_LoRa_WT.txt"
 
 # --- FUNÇÃO DE CONVERSÃO PARA PERCENTUAL ---
-
-
 def converter_para_percentual(series_dados):
     min_mah = 4.0
     max_mah = 20.0
     percentual = (series_dados - min_mah) * 100 / (max_mah - min_mah)
     return percentual.clip(0, 100)
-
 
 # --- CONTEÚDO HTML DA PÁGINA PRINCIPAL ---
 HTML_PRINCIPAL = """
@@ -260,8 +257,6 @@ HTML_GRAFICO = """
 app = Flask(__name__)
 
 # --- FUNÇÃO AUXILIAR PARA LER OS DADOS ---
-
-
 def obter_dados_do_ftp():
     ftp = None
     try:
@@ -269,32 +264,28 @@ def obter_dados_do_ftp():
         ftp.login(user=UTILIZADOR, passwd=SENHA)
         ftp.cwd(CAMINHO_DA_PASTA_FTP)
         dados_txt_em_memoria = io.BytesIO()
-        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_TXT}",
-                       dados_txt_em_memoria.write)
+        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_TXT}", dados_txt_em_memoria.write)
         dados_txt_em_memoria.seek(0)
-
+        
         # --- CORREÇÃO PARA ARQUIVO SEM CABEÇALHO ---
         # Lê o CSV informando que não há cabeçalho (header=None). A primeira coluna (0)
         # é usada como índice e formatada como data.
-        df = pd.read_csv(dados_txt_em_memoria, header=None,
-                         index_col=0, parse_dates=True)
-
+        df = pd.read_csv(dados_txt_em_memoria, header=None, index_col=0, parse_dates=True)
+        
         # Renomeia as colunas restantes (que o pandas nomeia como 1 e 2)
         # para os nomes que o restante do código espera.
         df.rename(columns={1: 'SENSOR 1', 2: 'SENSOR 2'}, inplace=True)
-
+        
         print(f"Colunas do DataFrame após o tratamento: {df.columns.tolist()}")
-
+        
         return df
     finally:
         if ftp:
             ftp.quit()
 
-
 @app.route("/")
 def pagina_principal():
     return render_template_string(HTML_PRINCIPAL)
-
 
 @app.route("/imagem")
 def servir_imagem():
@@ -304,8 +295,7 @@ def servir_imagem():
         ftp.login(user=UTILIZADOR, passwd=SENHA)
         ftp.cwd(CAMINHO_DA_PASTA_FTP)
         arquivo_em_memoria = io.BytesIO()
-        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_IMAGEM}",
-                       arquivo_em_memoria.write)
+        ftp.retrbinary(f"RETR {NOME_DO_ARQUIVO_IMAGEM}", arquivo_em_memoria.write)
         arquivo_em_memoria.seek(0)
         return send_file(arquivo_em_memoria, mimetype='image/png')
     except Exception as e:
@@ -315,11 +305,9 @@ def servir_imagem():
         if ftp:
             ftp.quit()
 
-
 @app.route("/pagina-grafico")
 def pagina_grafico():
     return render_template_string(HTML_GRAFICO)
-
 
 @app.route("/plot/<int:tanque_id>")
 def servir_grafico(tanque_id):
@@ -341,12 +329,10 @@ def servir_grafico(tanque_id):
             mostrar_aviso = True
         elif periodo == 'mensal' and timespan_total < timedelta(days=29):
             mostrar_aviso = True
-
+        
         if mostrar_aviso or df_completo.empty or width < 10 or height < 10:
-            fig, ax = plt.subplots(
-                figsize=(width / dpi, height / dpi), dpi=dpi)
-            ax.text(0.5, 0.5, 'Coletando dados para este período...',
-                    ha='center', va='center', fontsize=18, color='gray')
+            fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
+            ax.text(0.5, 0.5, 'Coletando dados para este período...', ha='center', va='center', fontsize=18, color='gray')
             ax.axis('off')
             buffer_imagem = io.BytesIO()
             fig.savefig(buffer_imagem, format='png')
@@ -356,8 +342,8 @@ def servir_grafico(tanque_id):
 
         agora = datetime.now()
         if periodo == 'diario':
-            inicio_periodo = agora - timedelta(days=1)
-            df = df_completo[df_completo.index >= inicio_periodo].copy()
+            hoje_inicio = agora.replace(hour=0, minute=0, second=0, microsecond=0)
+            df = df_completo[df_completo.index >= hoje_inicio].copy()
         elif periodo == 'semanal':
             inicio_periodo = agora - timedelta(days=7)
             df = df_completo[df_completo.index >= inicio_periodo].copy()
@@ -369,62 +355,54 @@ def servir_grafico(tanque_id):
 
         if tanque_id == 1:
             coluna_tanque = 'SENSOR 1'
-        # --- MODIFICAÇÃO: Corrigido o erro de digitação ---
         elif tanque_id == 2:
-            coluna_tanque = 'SENSOR 2'  # Estava 'coluna_tamque'
-        # --- FIM DA MODIFICAÇÃO ---
+            coluna_tanque = 'SENSOR 2'
         else:
             return "ID de tanque inválido.", 404
-
+        
         df[coluna_tanque] = converter_para_percentual(df[coluna_tanque])
 
         fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
-
+        
         for spine in ax.spines.values():
             spine.set_linewidth(1.5)
 
-        ax.plot(df.index, df[coluna_tanque], marker='o',
-                linestyle='-', markersize=4, color='blue', zorder=2)
-
+        ax.plot(df.index, df[coluna_tanque], marker='o', linestyle='-', markersize=4, color='blue', zorder=2)
+        
         ax.set_ylim(0, 105)
         ax.set_ylabel('Percentual (%)', fontsize=12)
         ax.set_xlabel('Horário', fontsize=12)
         ax.grid(True)
-
-        ticks_percentual = [0, 20, 40, 50, 60, 80, 100]
+        
+        # --- MODIFICAÇÃO: Define os marcadores do eixo Y ---
+        ticks_percentual = [0, 20, 40, 60, 80, 100]
         ax.set_yticks(ticks_percentual)
-
+        
         ax_direita = ax.twinx()
         ax_direita.set_ylim(0, 105)
+        # --- MODIFICAÇÃO: Define os mesmos marcadores para o eixo da direita ---
         ax_direita.set_yticks(ticks_percentual)
-
+        
         date_format = mdates.DateFormatter('%H:%M')
         ax.xaxis.set_major_formatter(date_format)
-
+        
         if periodo == 'diario':
             ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
         else:
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m %Hh'))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-
+        
         plt.xticks(rotation=30, ha='right', fontsize=10)
-
-        if periodo == 'diario':
-            # Itera sobre os labels (marcadores) do eixo X
-            for label in ax.get_xticklabels():
-                # Se o texto do label for "00:00", muda a cor
-                if label.get_text() == '00:00':
-                    label.set_color('orange')
-
+        
         fig.tight_layout()
-
+        
         buffer_imagem = io.BytesIO()
         fig.savefig(buffer_imagem, format='png')
         buffer_imagem.seek(0)
         plt.close(fig)
-
+        
         return send_file(buffer_imagem, mimetype='image/png')
-
+        
     except Exception as e:
         print(f"ERRO AO GERAR GRÁFICO DO RESERVATÓRIO {tanque_id}: {e}")
         traceback.print_exc()
