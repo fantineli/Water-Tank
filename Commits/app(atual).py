@@ -49,13 +49,13 @@ HTML_PRINCIPAL = """
 </head>
 <body>
     <div class="container">
-        <img id="imagemDinamica" src="/imagem" alt="Imagem carregada">
+        <img id="imagemDinamica" src="/imagem" alt="Imagem carregada do storage da empresa">
         <div class="info-bar">
             <div class="info-left-group">
                 <span class="info-title">WT HOPI HARI</span>
                 <span id="timestamp-display" class="info-timestamp"></span>
             </div>
-            <a href="/pagina-grafico" class="button">Ver Gráficos</a>
+            <a href="/pagina-grafico" class="button">Ver Gráfico</a>
         </div>
     </div>
     <script>
@@ -74,7 +74,7 @@ HTML_PRINCIPAL = """
 </html>
 """
 
-# --- CONTEÚDO HTML DA PÁGINA DOS GRÁFICOS ---
+# --- CONTEÚDO HTML DA PÁGINA DOS GRÁFICOS (COM SPINNER DE LOADING) ---
 HTML_GRAFICO = """
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -234,12 +234,12 @@ HTML_GRAFICO = """
             
             const hoje = new Date();
             const dia = String(hoje.getDate()).padStart(2, '0');
-            const mes = String(hoje.getMonth() + 1).padStart(2, '0');
+            const mes = String(hoje.getMonth() + 1).padStart(2, '0'); // Janeiro é 0!
             const ano = hoje.getFullYear();
             const dataFormatada = `${dia}/${mes}/${ano}`;
 
             const titulos = { 
-                'diario': 'Últimas 24 Horas', 
+                'diario': `Dia: ${dataFormatada}`, 
                 'semanal': 'Últimos 7 Dias', 
                 'mensal': 'Últimos 30 Dias' 
             };
@@ -274,10 +274,13 @@ def obter_dados_do_ftp():
         dados_txt_em_memoria.seek(0)
 
         # --- CORREÇÃO PARA ARQUIVO SEM CABEÇALHO ---
+        # Lê o CSV informando que não há cabeçalho (header=None). A primeira coluna (0)
+        # é usada como índice e formatada como data.
         df = pd.read_csv(dados_txt_em_memoria, header=None,
                          index_col=0, parse_dates=True)
 
-        # Renomeia as colunas
+        # Renomeia as colunas restantes (que o pandas nomeia como 1 e 2)
+        # para os nomes que o restante do código espera.
         df.rename(columns={1: 'SENSOR 1', 2: 'SENSOR 2'}, inplace=True)
 
         print(f"Colunas do DataFrame após o tratamento: {df.columns.tolist()}")
@@ -285,10 +288,7 @@ def obter_dados_do_ftp():
         return df
     finally:
         if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                pass
+            ftp.quit()
 
 
 @app.route("/")
@@ -313,10 +313,7 @@ def servir_imagem():
         return Response(f"Erro ao buscar imagem: {e}", status=500)
     finally:
         if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                pass
+            ftp.quit()
 
 
 @app.route("/pagina-grafico")
@@ -334,10 +331,21 @@ def servir_grafico(tanque_id):
         periodo = request.args.get('periodo', 'diario')
         df_completo = obter_dados_do_ftp()
 
-        if df_completo.empty or width < 10 or height < 10:
+        if not df_completo.empty:
+            timespan_total = df_completo.index.max() - df_completo.index.min()
+        else:
+            timespan_total = timedelta(days=0)
+
+        mostrar_aviso = False
+        if periodo == 'semanal' and timespan_total < timedelta(days=6):
+            mostrar_aviso = True
+        elif periodo == 'mensal' and timespan_total < timedelta(days=29):
+            mostrar_aviso = True
+
+        if mostrar_aviso or df_completo.empty or width < 10 or height < 10:
             fig, ax = plt.subplots(
                 figsize=(width / dpi, height / dpi), dpi=dpi)
-            ax.text(0.5, 0.5, 'Coletando dados...',
+            ax.text(0.5, 0.5, 'Coletando dados para este período...',
                     ha='center', va='center', fontsize=18, color='gray')
             ax.axis('off')
             buffer_imagem = io.BytesIO()
@@ -357,28 +365,30 @@ def servir_grafico(tanque_id):
             inicio_periodo = agora - timedelta(days=30)
             df = df_completo[df_completo.index >= inicio_periodo].copy()
         else:
-            # REVERTIDO: comportamento original — copia completa quando período inválido
             df = df_completo.copy()
 
         if tanque_id == 1:
             coluna_tanque = 'SENSOR 1'
+        # --- MODIFICAÇÃO: Corrigido o erro de digitação ---
         elif tanque_id == 2:
-            coluna_tanque = 'SENSOR 2'
+            coluna_tanque = 'SENSOR 2'  # Estava 'coluna_tamque'
+        # --- FIM DA MODIFICAÇÃO ---
         else:
             return "ID de tanque inválido.", 404
 
         df[coluna_tanque] = converter_para_percentual(df[coluna_tanque])
-
-        # REMOVE OUTLIERS: Substitui 0% (erro do sensor) por NA (Não Disponível).
-        df[coluna_tanque] = df[coluna_tanque].replace(0, pd.NA)
 
         fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
 
         for spine in ax.spines.values():
             spine.set_linewidth(1.5)
 
+        ax.plot(df.index, df[coluna_tanque], marker='o',
+                linestyle='-', markersize=4, color='blue', zorder=2)
+
         ax.set_ylim(0, 105)
         ax.set_ylabel('Percentual (%)', fontsize=12)
+        ax.set_xlabel('Horário', fontsize=12)
         ax.grid(True)
 
         ticks_percentual = [0, 20, 40, 50, 60, 80, 100]
@@ -388,52 +398,23 @@ def servir_grafico(tanque_id):
         ax_direita.set_ylim(0, 105)
         ax_direita.set_yticks(ticks_percentual)
 
-        # --- LÓGICA DE PLOTAGEM SEPARADA POR PERÍODO ---
+        date_format = mdates.DateFormatter('%H:%M')
+        ax.xaxis.set_major_formatter(date_format)
 
-        if periodo == 'diario' or periodo == 'semanal':
-            # --- PLOTAGEM DIÁRIA E SEMANAL (GRÁFICO DE LINHA CONTÍNUA) ---
-            ax.plot(df.index, df[coluna_tanque], marker='o',
-                    linestyle='-', markersize=4, color='blue', zorder=2)
+        if periodo == 'diario':
+            ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        else:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m %Hh'))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
 
-            if periodo == 'diario':
-                ax.set_xlabel('Horário', fontsize=12)
-                date_format = mdates.DateFormatter('%H:%M')
-                ax.xaxis.set_major_formatter(date_format)
-                ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-
-                # REINSTALEI isto (como no seu original): pinta '00:00' em laranja
-                for label in ax.get_xticklabels():
-                    if label.get_text() == '00:00':
-                        label.set_color('orange')
-
-            elif periodo == 'semanal':
-                ax.set_xlabel('Data', fontsize=12)
-                date_format = mdates.DateFormatter('%d/%m')
-                ax.xaxis.set_major_formatter(date_format)
-                ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-
-        elif periodo == 'mensal':
-            # ✅ RESUMO LIMPO – APENAS 1 PONTO/DIA, SEM RUÍDO, SEM BOLINHAS PRETAS
-            ax.set_xlabel('Data', fontsize=12)
-
-            df_resumido = df[coluna_tanque].resample(
-                'D').agg(['min', 'max']).dropna()
-            df_resumido['media'] = df_resumido[['min', 'max']].mean(axis=1)
-
-            ax.plot(
-                df_resumido.index,
-                df_resumido['media'],
-                linestyle='-',
-                linewidth=2,
-                color='blue',
-                zorder=2
-            )
-
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-
-        # --- FIM DA LÓGICA DE PLOTAGEM ---
         plt.xticks(rotation=30, ha='right', fontsize=10)
+
+        if periodo == 'diario':
+            # Itera sobre os labels (marcadores) do eixo X
+            for label in ax.get_xticklabels():
+                # Se o texto do label for "00:00", muda a cor
+                if label.get_text() == '00:00':
+                    label.set_color('orange')
 
         fig.tight_layout()
 

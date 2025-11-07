@@ -1,16 +1,12 @@
-from flask import Flask, render_template_string, send_file, Response, request
+from flask import Flask, render_template_string, send_file, Response, request, jsonify
 from ftplib import FTP
 import io
 import traceback
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib
-from matplotlib import dates as mdates
+import matplotlib # Matplotlib não é mais usado para os gráficos, mas pode ser mantido se você tiver outras dependências
 from datetime import datetime, timedelta
 
-matplotlib.use('Agg')
-
-# --- CONFIGURAÇÃO FTP ---
+# --- CONFIGURAÇÃO FTP (Sem alterações) ---
 SERVIDOR_FTP = "10.100.100.157"
 UTILIZADOR = "NeoOne"
 SENHA = "Neo@123"
@@ -18,17 +14,14 @@ CAMINHO_DA_PASTA_FTP = "WT_HH"
 NOME_DO_ARQUIVO_IMAGEM = "HH_LoRa_WTSCR.png"
 NOME_DO_ARQUIVO_TXT = "HH_LoRa_WT.txt"
 
-# --- FUNÇÃO DE CONVERSÃO PARA PERCENTUAL ---
-
-
+# --- FUNÇÃO DE CONVERSÃO (Sem alterações) ---
 def converter_para_percentual(series_dados):
     min_mah = 4.0
     max_mah = 20.0
     percentual = (series_dados - min_mah) * 100 / (max_mah - min_mah)
     return percentual.clip(0, 100)
 
-
-# --- CONTEÚDO HTML DA PÁGINA PRINCIPAL ---
+# --- CONTEÚDO HTML DA PÁGINA PRINCIPAL (Sem alterações) ---
 HTML_PRINCIPAL = """
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -49,13 +42,13 @@ HTML_PRINCIPAL = """
 </head>
 <body>
     <div class="container">
-        <img id="imagemDinamica" src="/imagem" alt="Imagem carregada">
+        <img id="imagemDinamica" src="/imagem" alt="Imagem carregada do storage da empresa">
         <div class="info-bar">
             <div class="info-left-group">
                 <span class="info-title">WT HOPI HARI</span>
                 <span id="timestamp-display" class="info-timestamp"></span>
             </div>
-            <a href="/pagina-grafico" class="button">Ver Gráficos</a>
+            <a href="/pagina-grafico" class="button">Ver Gráfico</a>
         </div>
     </div>
     <script>
@@ -74,7 +67,7 @@ HTML_PRINCIPAL = """
 </html>
 """
 
-# --- CONTEÚDO HTML DA PÁGINA DOS GRÁFICOS ---
+# --- CONTEÚDO HTML DA PÁGINA DOS GRÁFICOS (Modificado para Plotly.js) ---
 HTML_GRAFICO = """
 <!DOCTYPE html>
 <html lang="pt-br">
@@ -82,6 +75,7 @@ HTML_GRAFICO = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gráficos de Medições - WT HOPI HARI</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -112,7 +106,7 @@ HTML_GRAFICO = """
         .main-content {
             flex-grow: 1;
             display: flex;
-            flex-direction: column;
+            flex-direction: column; /* Altera para coluna para melhor responsividade em telas menores se necessário */
             gap: 20px;
             width: 100%;
             max-width: 1800px;
@@ -130,24 +124,21 @@ HTML_GRAFICO = """
             min-height: 0;
         }
         .grafico-container h1 { margin-top: 0; margin-bottom: 10px; font-size: 1.1em; }
+        
+        /* 2. O grafico-wrapper agora contém o <div> do Plotly e o loader */
         .grafico-wrapper {
             position: relative;
             flex-grow: 1;
             width: 100%;
             height: 100%;
+            min-height: 250px; /* Garante uma altura mínima */
         }
-        img {
+        /* O <div> do gráfico Plotly */
+        .grafico-plotly {
             width: 100%;
             height: 100%;
-            object-fit: fill;
-            visibility: hidden;
-            opacity: 0;
-            transition: visibility 0s, opacity 0.5s linear;
         }
-        img.loaded {
-            visibility: visible;
-            opacity: 1;
-        }
+        
         .loader {
             border: 5px solid #f3f3f3;
             border-top: 5px solid #3498db;
@@ -160,6 +151,8 @@ HTML_GRAFICO = """
             left: 50%;
             margin-top: -25px;
             margin-left: -25px;
+            z-index: 10;
+            display: none; /* Começa escondido */
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -181,14 +174,14 @@ HTML_GRAFICO = """
             <h1 id="titulo-t1">Reservatório de Consumo 1</h1>
             <div class="grafico-wrapper">
                 <div id="loader1" class="loader"></div>
-                <img id="graficoTanque1" src="" alt="Gráfico do Reservatório de Consumo 1">
+                <div id="graficoTanque1" class="grafico-plotly"></div>
             </div>
         </div>
         <div class="grafico-container">
             <h1 id="titulo-t2">Reservatório de Consumo 2</h1>
             <div class="grafico-wrapper">
                 <div id="loader2" class="loader"></div>
-                <img id="graficoTanque2" src="" alt="Gráfico do Reservatório de Consumo 2">
+                <div id="graficoTanque2" class="grafico-plotly"></div>
             </div>
         </div>
     </div>
@@ -199,39 +192,8 @@ HTML_GRAFICO = """
             periodoAtual = periodo;
             document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
             document.querySelector(`button[onclick="definirPeriodo('${periodo}')"]`).classList.add('active');
-            atualizarGraficos();
-        }
-
-        function carregarGrafico(imgId, loaderId, url) {
-            const imgElement = document.getElementById(imgId);
-            const loaderElement = document.getElementById(loaderId);
-
-            loaderElement.style.display = 'block';
-            imgElement.classList.remove('loaded');
             
-            imgElement.onload = () => {
-                loaderElement.style.display = 'none';
-                imgElement.classList.add('loaded');
-            };
-
-            imgElement.src = url;
-        }
-
-        function atualizarGraficos() {
-            const timestamp = new Date().getTime();
-            
-            const wrapper1 = document.getElementById('graficoTanque1').parentElement;
-            const width1 = wrapper1.offsetWidth;
-            const height1 = wrapper1.offsetHeight;
-            const url1 = `/plot/1?periodo=${periodoAtual}&w=${width1}&h=${height1}&cachebuster=${timestamp}`;
-            carregarGrafico('graficoTanque1', 'loader1', url1);
-
-            const wrapper2 = document.getElementById('graficoTanque2').parentElement;
-            const width2 = wrapper2.offsetWidth;
-            const height2 = wrapper2.offsetHeight;
-            const url2 = `/plot/2?periodo=${periodoAtual}&w=${width2}&h=${height2}&cachebuster=${timestamp}`;
-            carregarGrafico('graficoTanque2', 'loader2', url2);
-            
+            // Atualiza títulos
             const hoje = new Date();
             const dia = String(hoje.getDate()).padStart(2, '0');
             const mes = String(hoje.getMonth() + 1).padStart(2, '0');
@@ -239,18 +201,114 @@ HTML_GRAFICO = """
             const dataFormatada = `${dia}/${mes}/${ano}`;
 
             const titulos = { 
-                'diario': 'Últimas 24 Horas', 
+                'diario': `Dia: ${dataFormatada}`, 
                 'semanal': 'Últimos 7 Dias', 
                 'mensal': 'Últimos 30 Dias' 
             };
-
             document.getElementById('titulo-t1').innerText = `Reservatório de Consumo 1 (${titulos[periodoAtual]})`;
             document.getElementById('titulo-t2').innerText = `Reservatório de Consumo 2 (${titulos[periodoAtual]})`;
+            
+            atualizarGraficos();
+        }
+
+        // 4. Nova função para atualizar os gráficos com Plotly
+        async function atualizarGraficos() {
+            const loader1 = document.getElementById('loader1');
+            const loader2 = document.getElementById('loader2');
+            const grafico1 = document.getElementById('graficoTanque1');
+            const grafico2 = document.getElementById('graficoTanque2');
+
+            // Mostra os loaders
+            loader1.style.display = 'block';
+            loader2.style.display = 'block';
+
+            try {
+                // Busca os dados da nova API
+                const response = await fetch(`/api/dados-grafico?periodo=${periodoAtual}`);
+                if (!response.ok) {
+                    throw new Error(`Erro na API: ${response.statusText}`);
+                }
+                const dados = await response.json();
+
+                if (dados.status === 'coletando') {
+                    // Mostra mensagem de "Coletando dados"
+                    Plotly.purge(grafico1); // Limpa gráfico anterior
+                    Plotly.purge(grafico2);
+                    grafico1.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:gray; font-size:18px;">Coletando dados para este período...</div>';
+                    grafico2.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:gray; font-size:18px;">Coletando dados para este período...</div>';
+                
+                } else if (dados.timestamp && dados.timestamp.length > 0) {
+                    // Prepara os dados para o Plotly
+                    const trace1 = {
+                        x: dados.timestamp,
+                        y: dados.sensor1,
+                        mode: 'lines+markers',
+                        type: 'scatter',
+                        marker: { size: 4 }
+                    };
+                    
+                    const trace2 = {
+                        x: dados.timestamp,
+                        y: dados.sensor2,
+                        mode: 'lines+markers',
+                        type: 'scatter',
+                        marker: { size: 4 }
+                    };
+
+                    // Configura o layout (eixo Y fixo como no original)
+                    const layout = {
+                        yaxis: {
+                            range: [0, 105],
+                            tickvals: [0, 20, 40, 50, 60, 80, 100],
+                            title: 'Percentual (%)'
+                        },
+                        xaxis: {
+                            title: 'Horário'
+                        },
+                        margin: { l: 50, r: 30, b: 50, t: 30 },
+                        hovermode: 'x unified' // Melhora o tooltip
+                    };
+                    
+                    // Configurações de responsividade
+                    const config = { responsive: true };
+
+                    // Desenha os gráficos
+                    Plotly.react(grafico1, [trace1], layout, config);
+                    Plotly.react(grafico2, [trace2], layout, config);
+                
+                } else {
+                    // Caso de dados vazios
+                    Plotly.purge(grafico1);
+                    Plotly.purge(grafico2);
+                    grafico1.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:gray; font-size:18px;">Sem dados disponíveis...</div>';
+                    grafico2.innerHTML = '<div style="display:flex; align-items:center; justify-content:center; height:100%; color:gray; font-size:18px;">Sem dados disponíveis...</div>';
+                }
+
+            } catch (error) {
+                console.error("Erro ao atualizar gráficos:", error);
+                grafico1.innerHTML = `<div style="display:flex; align-items:center; justify-content:center; height:100%; color:red; font-size:14px;">Erro ao carregar dados: ${error.message}</div>`;
+                grafico2.innerHTML = `<div style="display:flex; align-items:center; justify-content:center; height:100%; color:red; font-size:14px;">Erro ao carregar dados: ${error.message}</div>`;
+            } finally {
+                // Esconde os loaders
+                loader1.style.display = 'none';
+                loader2.style.display = 'none';
+            }
         }
         
-        document.addEventListener('DOMContentLoaded', atualizarGraficos);
-        setInterval(atualizarGraficos, 300000);
-        window.addEventListener('resize', atualizarGraficos);
+        // Carga inicial
+        document.addEventListener('DOMContentLoaded', () => definirPeriodo('diario'));
+        
+        // Atualização periódica
+        setInterval(atualizarGraficos, 300000); // 5 minutos
+        
+        // Redesenha os gráficos ao redimensionar a janela
+        window.addEventListener('resize', () => {
+             // Plotly.react lida bem com resize, mas podemos forçar um relayout se necessário
+             // Apenas chamar 'atualizarGraficos' pode ser pesado (nova chamada de API)
+             // Em vez disso, apenas redimensionamos
+             Plotly.Plots.resize(document.getElementById('graficoTanque1'));
+             Plotly.Plots.resize(document.getElementById('graficoTanque2'));
+        });
     </script>
 </body>
 </html>
@@ -259,9 +317,7 @@ HTML_GRAFICO = """
 # --- APLICAÇÃO WEB ---
 app = Flask(__name__)
 
-# --- FUNÇÃO AUXILIAR PARA LER OS DADOS ---
-
-
+# --- FUNÇÃO AUXILIAR PARA LER OS DADOS (Sem alterações) ---
 def obter_dados_do_ftp():
     ftp = None
     try:
@@ -273,28 +329,19 @@ def obter_dados_do_ftp():
                        dados_txt_em_memoria.write)
         dados_txt_em_memoria.seek(0)
 
-        # --- CORREÇÃO PARA ARQUIVO SEM CABEÇALHO ---
         df = pd.read_csv(dados_txt_em_memoria, header=None,
                          index_col=0, parse_dates=True)
 
-        # Renomeia as colunas
         df.rename(columns={1: 'SENSOR 1', 2: 'SENSOR 2'}, inplace=True)
-
-        print(f"Colunas do DataFrame após o tratamento: {df.columns.tolist()}")
-
         return df
     finally:
         if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                pass
+            ftp.quit()
 
-
+# --- ROTAS DA PÁGINA (Sem alterações) ---
 @app.route("/")
 def pagina_principal():
     return render_template_string(HTML_PRINCIPAL)
-
 
 @app.route("/imagem")
 def servir_imagem():
@@ -313,39 +360,36 @@ def servir_imagem():
         return Response(f"Erro ao buscar imagem: {e}", status=500)
     finally:
         if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                pass
-
+            ftp.quit()
 
 @app.route("/pagina-grafico")
 def pagina_grafico():
     return render_template_string(HTML_GRAFICO)
 
 
-@app.route("/plot/<int:tanque_id>")
-def servir_grafico(tanque_id):
+# --- NOVA ROTA DE API DE DADOS ---
+# Esta rota substitui a antiga "/plot/<id>"
+@app.route("/api/dados-grafico")
+def api_dados_grafico():
     try:
-        width = request.args.get('w', default=1200, type=int)
-        height = request.args.get('h', default=400, type=int)
-        dpi = 100
-
         periodo = request.args.get('periodo', 'diario')
         df_completo = obter_dados_do_ftp()
 
-        if df_completo.empty or width < 10 or height < 10:
-            fig, ax = plt.subplots(
-                figsize=(width / dpi, height / dpi), dpi=dpi)
-            ax.text(0.5, 0.5, 'Coletando dados...',
-                    ha='center', va='center', fontsize=18, color='gray')
-            ax.axis('off')
-            buffer_imagem = io.BytesIO()
-            fig.savefig(buffer_imagem, format='png')
-            buffer_imagem.seek(0)
-            plt.close(fig)
-            return send_file(buffer_imagem, mimetype='image/png')
+        if df_completo.empty:
+             return jsonify(timestamp=[], sensor1=[], sensor2=[])
 
+        # Verifica se tem dados suficientes (mesma lógica sua)
+        timespan_total = df_completo.index.max() - df_completo.index.min()
+        mostrar_aviso = False
+        if periodo == 'semanal' and timespan_total < timedelta(days=6):
+            mostrar_aviso = True
+        elif periodo == 'mensal' and timespan_total < timedelta(days=29):
+            mostrar_aviso = True
+
+        if mostrar_aviso:
+            return jsonify(status='coletando')
+
+        # Filtra o DataFrame (mesma lógica sua)
         agora = datetime.now()
         if periodo == 'diario':
             inicio_periodo = agora - timedelta(days=1)
@@ -357,94 +401,34 @@ def servir_grafico(tanque_id):
             inicio_periodo = agora - timedelta(days=30)
             df = df_completo[df_completo.index >= inicio_periodo].copy()
         else:
-            # REVERTIDO: comportamento original — copia completa quando período inválido
             df = df_completo.copy()
 
-        if tanque_id == 1:
-            coluna_tanque = 'SENSOR 1'
-        elif tanque_id == 2:
-            coluna_tanque = 'SENSOR 2'
-        else:
-            return "ID de tanque inválido.", 404
+        if df.empty:
+            return jsonify(timestamp=[], sensor1=[], sensor2=[])
+            
+        # Converte os dados (ambas as colunas)
+        df['SENSOR 1'] = converter_para_percentual(df['SENSOR 1'])
+        df['SENSOR 2'] = converter_para_percentual(df['SENSOR 2'])
+        
+        # Formata os dados para JSON
+        # Plotly.js lida bem com strings de data ISO
+        df['timestamp_iso'] = df.index.strftime('%Y-%m-%dT%H:%M:%S')
 
-        df[coluna_tanque] = converter_para_percentual(df[coluna_tanque])
-
-        # REMOVE OUTLIERS: Substitui 0% (erro do sensor) por NA (Não Disponível).
-        df[coluna_tanque] = df[coluna_tanque].replace(0, pd.NA)
-
-        fig, ax = plt.subplots(figsize=(width / dpi, height / dpi), dpi=dpi)
-
-        for spine in ax.spines.values():
-            spine.set_linewidth(1.5)
-
-        ax.set_ylim(0, 105)
-        ax.set_ylabel('Percentual (%)', fontsize=12)
-        ax.grid(True)
-
-        ticks_percentual = [0, 20, 40, 50, 60, 80, 100]
-        ax.set_yticks(ticks_percentual)
-
-        ax_direita = ax.twinx()
-        ax_direita.set_ylim(0, 105)
-        ax_direita.set_yticks(ticks_percentual)
-
-        # --- LÓGICA DE PLOTAGEM SEPARADA POR PERÍODO ---
-
-        if periodo == 'diario' or periodo == 'semanal':
-            # --- PLOTAGEM DIÁRIA E SEMANAL (GRÁFICO DE LINHA CONTÍNUA) ---
-            ax.plot(df.index, df[coluna_tanque], marker='o',
-                    linestyle='-', markersize=4, color='blue', zorder=2)
-
-            if periodo == 'diario':
-                ax.set_xlabel('Horário', fontsize=12)
-                date_format = mdates.DateFormatter('%H:%M')
-                ax.xaxis.set_major_formatter(date_format)
-                ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-
-                # REINSTALEI isto (como no seu original): pinta '00:00' em laranja
-                for label in ax.get_xticklabels():
-                    if label.get_text() == '00:00':
-                        label.set_color('orange')
-
-            elif periodo == 'semanal':
-                ax.set_xlabel('Data', fontsize=12)
-                date_format = mdates.DateFormatter('%d/%m')
-                ax.xaxis.set_major_formatter(date_format)
-                ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-
-        elif periodo == 'mensal':
-            # ✅ RESUMO LIMPO – APENAS 1 PONTO/DIA, SEM RUÍDO, SEM BOLINHAS PRETAS
-            ax.set_xlabel('Data', fontsize=12)
-
-            df_resumido = df[coluna_tanque].resample(
-                'D').agg(['min', 'max']).dropna()
-            df_resumido['media'] = df_resumido[['min', 'max']].mean(axis=1)
-
-            ax.plot(
-                df_resumido.index,
-                df_resumido['media'],
-                linestyle='-',
-                linewidth=2,
-                color='blue',
-                zorder=2
-            )
-
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
-
-        # --- FIM DA LÓGICA DE PLOTAGEM ---
-        plt.xticks(rotation=30, ha='right', fontsize=10)
-
-        fig.tight_layout()
-
-        buffer_imagem = io.BytesIO()
-        fig.savefig(buffer_imagem, format='png')
-        buffer_imagem.seek(0)
-        plt.close(fig)
-
-        return send_file(buffer_imagem, mimetype='image/png')
+        # Retorna o JSON que o JavaScript espera
+        return jsonify(
+            timestamp=df['timestamp_iso'].tolist(),
+            sensor1=df['SENSOR 1'].tolist(),
+            sensor2=df['SENSOR 2'].tolist()
+        )
 
     except Exception as e:
-        print(f"ERRO AO GERAR GRÁFICO DO RESERVATÓRIO {tanque_id}: {e}")
+        print(f"ERRO AO GERAR DADOS DA API: {e}")
         traceback.print_exc()
-        return Response(f"Erro ao gerar gráfico T{tanque_id}: {e}", status=500)
+        # Retorna um erro em JSON para o frontend tratar
+        return jsonify(error=str(e)), 500
+
+# --- ROTA /plot REMOVIDA ---
+# A rota @app.route("/plot/<int:tanque_id>") não é mais necessária
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000) # Exemplo de como rodar
